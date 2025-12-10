@@ -21,6 +21,9 @@ You will need to pass `hog_lock` a context manager that acquires and releases th
 you want to be hogged (see below for examples). A class, `LockHogger`, is provided, to 
 help you write these context managers, but its usage is entirely optional.
 
+An asynchronous utility is also provided, `async_hog_lock`, which operates in pretty 
+much exact analogy to `hog_lock`.
+
 ## Examples
 
 ### Debouncing a Function
@@ -280,6 +283,64 @@ thread/process to the one running the test. As such, you could use it for hoggin
   [docs](https://docs.python.org/3/library/fcntl.html))
 - A distributed redis lock, using `redis.lock.Lock`
 
+### Hogging async locks
+
+Async variants of `hog_lock` and `LockHogger` are also provided (named `async_hog_lock`
+and `AsyncLockHogger` respectively). Their API is very similar to their synchronous 
+versions, albeit in an asynchronous form.
+
+Say that `pay_individual` from the first example was actually an asynchronous function:
+~~~python
+# inside pay_individual.py
+import asyncio
+
+async def _pay_individual(...) -> None:
+    # The actual implementation of pay_individual
+    ...
+
+class AlreadyPayingIndividual(Exception):
+    pass
+
+PAY_INDIVIDUAL_LOCK = asyncio.Lock()
+
+async def pay_individual(...) -> None:
+    try:
+        async with asyncio.timeout(0.1):
+            await PAY_INDIVIDUAL_LOCK.acquire()
+    except asyncio.TimeoutError as e:
+        raise AlreadyPayingIndividual from e
+    
+    await _pay_individual(...)
+    
+    PAY_INDIVIDUAL_LOCK.release()
+
+~~~
+
+Using `async_hog_lock` and `AsyncLockHogger` to test its behaviour may look something 
+like:
+~~~python
+# inside test_pay_individual.py
+import unittest
+
+import lock_hog
+
+import pay_individual
+
+class PayIndividualLockHogger(lock_hog.AsyncLockHogger):
+    async def acquire_lock(self) -> None:
+        await pay_individual.PAY_INDIVIDUAL_LOCK.acquire()
+    
+    async def release_lock(self) -> None:
+        pay_individual.PAY_INDIVIDUAL_LOCK.release()
+
+class TestPayIndividual(unittest.IsolatedAsyncioTestCase):
+    def test_raises_if_multiple_tasks_try_to_pay_individuals(self) -> None:
+        with lock_hog.async_hog_lock(lock_hogger=PayIndividualLockHogger()):
+            with self.assertRaises(pay_individual.AlreadyPayingIndividual):
+                pay_individual.pay_individual(...)
+
+~~~
+
 ## Contributing to `lock-hog`
 
 ### Running tests
@@ -313,17 +374,6 @@ Please ensure all PRs have appropriate test coverage.
 
 We should include an API reference for `hog_lock` and `LockHogger`. Mention `LockHogger`
 provides no guarantees that any locks acquired in `acquire_lock` will be released.
-
-### Extend to Support Hogging Async Locks
-
-I haven't got my head around this one quite as much. It'd almost certainly warrant a 
-separate function and helper class:
-- `async_hog_lock` (or `ahog_lock` after django?)
-- `AsyncLockHogger`
-
-Seems that python does have an async version of `Event` (see
-[docs](https://docs.python.org/3/library/asyncio-sync.html#asyncio.Event)), so this is 
-likely doable!
 
 ### Add github actions
 
