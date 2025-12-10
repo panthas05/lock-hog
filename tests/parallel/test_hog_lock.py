@@ -5,7 +5,7 @@ import unittest
 from multiprocessing.synchronize import Lock as MultiprocessingLock
 
 import lock_hog
-from lock_hog.hog_lock import HoggerStillAlive
+from lock_hog.parallel.hog_lock import HoggerStillAlive
 
 
 class CouldNotAcquireLock(Exception):
