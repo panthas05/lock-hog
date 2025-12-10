@@ -14,8 +14,8 @@ lock).
 ## How it Works
 
 The package offers a context manager `hog_lock`, which acquires a lock on entry and 
-releases it on exit. The lock is acquired from within a different thread to the one that
-calls `hog_lock`. `hog_lock` can also be used as a decorator.
+releases it on exit. The lock is acquired from within a different thread/process to the 
+one that calls `hog_lock`. `hog_lock` can also be used as a decorator.
 
 You will need to pass `hog_lock` a context manager that acquires and releases the lock 
 you want to be hogged (see below for examples). A class, `LockHogger`, is provided, to 
@@ -273,7 +273,7 @@ This example was the real-world situation that prompted the writing of this pack
 ### Other uses
 
 This package should be useful wherever you need to acquire a lock from a different 
-thread to the one running the test. As such, you could use it for hogging:
+thread/process to the one running the test. As such, you could use it for hogging:
 - Advisory locks in databases other than postgres (i.e. not using `pglock` as in the 
   above example)
 - UNIX file/io locks, using `fcntl` (see 
@@ -313,29 +313,6 @@ Please ensure all PRs have appropriate test coverage.
 
 We should include an API reference for `hog_lock` and `LockHogger`. Mention `LockHogger`
 provides no guarantees that any locks acquired in `acquire_lock` will be released.
-
-### Extend to Support Processes
-
-The lock is acquired from another thread, but there's no reason why it couldn't
-be acquired from a process (python offers a multiprocessing version of `Event`,
-see
-[docs](https://docs.python.org/3/library/multiprocessing.html#multiprocessing.Event),
-which is pretty much entirely what this package is built around). I'd
-envision `hog_lock` taking an enum arg `hog_from: HogFrom = HogFrom.THREAD`,
-where:
-
-~~~python
-import enum
-
-class HogFrom(enum.StrEnum):
-    THREAD = "THREAD"
-    PROCESS = "PROCESS"
-
-~~~
-
-Then inside `hog_lock`, it uses `threading.Thread` and `threading.Event` if 
-`hog_from==HogFrom.THREAD`, and uses `multiprocessing.Process` and 
-`multiprocessing.Event` if `hog_from==HogFrom.PROCESS`
 
 ### Extend to Support Hogging Async Locks
 
