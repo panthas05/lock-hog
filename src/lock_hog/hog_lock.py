@@ -1,27 +1,47 @@
 import contextlib
+import enum
+import multiprocessing
 import threading
 import typing
+from multiprocessing.synchronize import Event as MultiprocessingEvent
+
+Executor = threading.Thread | multiprocessing.Process
+Event = threading.Event | MultiprocessingEvent
 
 
 def _hog_lock_until_instructed_to_release(
     *,
     context_manager_that_acquires_lock: contextlib.AbstractContextManager[None],
-    lock_acquired_event: threading.Event,
-    release_lock_event: threading.Event,
+    lock_acquired_event: Event,
+    release_lock_event: Event,
 ) -> None:
     with context_manager_that_acquires_lock:
         lock_acquired_event.set()
         release_lock_event.wait()
 
 
-def _hog_lock_from_thread(
-    *,
-    context_manager_that_acquires_lock: contextlib.AbstractContextManager[None],
-) -> tuple[threading.Thread, threading.Event]:
-    release_lock_event = threading.Event()
+class HogFrom(enum.StrEnum):
+    THREAD = "THREAD"
+    PROCESS = "PROCESS"
 
-    lock_acquired_event = threading.Event()
-    hogging_thread = threading.Thread(
+
+def _hog_lock(
+    *,
+    hog_from: HogFrom,
+    context_manager_that_acquires_lock: contextlib.AbstractContextManager[None],
+) -> tuple[Executor, Event]:
+    if hog_from == HogFrom.THREAD:
+        lock_acquired_event: Event = threading.Event()
+        release_lock_event: Event = threading.Event()
+        executor_class: type[Executor] = threading.Thread
+    elif hog_from == HogFrom.PROCESS:
+        lock_acquired_event = multiprocessing.Event()
+        release_lock_event = multiprocessing.Event()
+        executor_class = multiprocessing.Process
+    else:
+        typing.assert_never(hog_from)
+
+    executor = executor_class(
         target=_hog_lock_until_instructed_to_release,
         kwargs={
             "context_manager_that_acquires_lock": context_manager_that_acquires_lock,
@@ -32,14 +52,14 @@ def _hog_lock_from_thread(
         daemon=True,
     )
 
-    hogging_thread.start()
-    # wait until the hogging thread signals that it has acquired the lock
+    executor.start()
+    # wait until the executor signals that it has acquired the lock
     lock_acquired_event.wait()
 
-    return hogging_thread, release_lock_event
+    return executor, release_lock_event
 
 
-DEFAULT_THREAD_JOIN_TIMEOUT = 1.0
+DEFAULT_JOIN_TIMEOUT = 1.0
 
 
 class HoggerStillAlive(Exception):
@@ -50,9 +70,11 @@ class HoggerStillAlive(Exception):
 def hog_lock(
     lock_hogger: contextlib.AbstractContextManager[None],
     *,
+    hog_from: HogFrom = HogFrom.THREAD,
     timeout: float | None = None,
 ) -> typing.Generator[None, None, None]:
-    hogging_thread, release_lock_event = _hog_lock_from_thread(
+    hogger_executor, release_lock_event = _hog_lock(
+        hog_from=hog_from,
         context_manager_that_acquires_lock=lock_hogger,
     )
 
@@ -60,12 +82,12 @@ def hog_lock(
 
     release_lock_event.set()
 
-    timeout = timeout or DEFAULT_THREAD_JOIN_TIMEOUT
-    hogging_thread.join(timeout=timeout)
-    if hogging_thread.is_alive():
+    timeout = timeout or DEFAULT_JOIN_TIMEOUT
+    hogger_executor.join(timeout=timeout)
+    if hogger_executor.is_alive():
         alive_time_description = "1 second" if timeout == 1.0 else f"{timeout} seconds"
         raise HoggerStillAlive(
-            f"The thread that hogged the lock was still alive after "
+            f"The {hog_from.value.lower()} that hogged the lock was still alive after "
             f"{alive_time_description}. If this doesn't indicate a bug, consider "
             "passing a longer timeout value to `hog_lock`."
         )
